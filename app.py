@@ -1,9 +1,11 @@
 
 import os
+import logging
 from flask import Flask, request, jsonify, render_template_string
 from google import genai
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
 HTML = """
 <!DOCTYPE html>
@@ -13,6 +15,7 @@ HTML = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JARVIS AI</title>
 <style>
+* { box-sizing: border-box; }
 body {
     margin: 0;
     background: #080d16;
@@ -31,29 +34,38 @@ h1 { text-align: center; font-size: 38px; }
     border: 1px solid #00e5ff;
     border-radius: 15px;
     padding: 15px;
-    height: 380px;
+    height: 400px;
     overflow-y: auto;
     color: white;
 }
-.message { margin: 14px 0; white-space: pre-wrap; }
+.message {
+    margin: 14px 0;
+    white-space: pre-wrap;
+    line-height: 1.8;
+}
+.input-area {
+    display: flex;
+    gap: 8px;
+    margin-top: 15px;
+}
 input {
-    box-sizing: border-box;
-    width: 78%;
+    flex: 1;
+    min-width: 0;
     padding: 14px;
     border-radius: 10px;
     border: 1px solid #00e5ff;
     background: #111c2b;
     color: white;
-    margin-top: 15px;
 }
 button {
-    padding: 14px;
+    padding: 14px 20px;
     border: 0;
     border-radius: 10px;
     background: #00c8e5;
     cursor: pointer;
     font-weight: bold;
 }
+button:disabled { opacity: .5; }
 </style>
 </head>
 <body>
@@ -63,12 +75,16 @@ button {
     <div id="chat">
         <div class="message">JARVIS: سلام! من آماده‌ام. چه کاری برات انجام بدم؟</div>
     </div>
-    <input id="message" placeholder="پیامت را بنویس...">
-    <button id="send" onclick="sendMessage()">ارسال</button>
+    <div class="input-area">
+        <input id="message" placeholder="پیامت را بنویس...">
+        <button id="send" onclick="sendMessage()">ارسال</button>
+    </div>
 </div>
+
 <script>
 const chat = document.getElementById("chat");
 const input = document.getElementById("message");
+const button = document.getElementById("send");
 
 function addMessage(who, text) {
     const p = document.createElement("div");
@@ -85,7 +101,6 @@ async function sendMessage() {
     input.value = "";
     addMessage("شما", message);
 
-    const button = document.getElementById("send");
     button.disabled = true;
     button.textContent = "در حال فکر کردن...";
 
@@ -97,18 +112,23 @@ async function sendMessage() {
         });
 
         const data = await response.json();
-        if (!response.ok) throw new Error(data.reply || "خطا در پاسخ");
+
+        if (!response.ok) {
+            throw new Error(data.reply || "خطا در پاسخ");
+        }
 
         addMessage("JARVIS", data.reply);
+
     } catch (error) {
         addMessage("خطا", error.message);
     } finally {
         button.disabled = false;
         button.textContent = "ارسال";
+        input.focus();
     }
 }
 
-input.addEventListener("keydown", e => {
+input.addEventListener("keydown", function(e) {
     if (e.key === "Enter") sendMessage();
 });
 </script>
@@ -119,6 +139,12 @@ input.addEventListener("keydown", e => {
 @app.route("/")
 def home():
     return render_template_string(HTML)
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "online"})
+
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -133,24 +159,39 @@ def chat():
             return jsonify({"reply": "پیامت خیلی طولانی است."}), 400
 
         api_key = os.environ.get("GEMINI_API_KEY")
+
         if not api_key:
-            return jsonify({"reply": "کلید Gemini در سرور تنظیم نشده است."}), 500
+            return jsonify({
+                "reply": "کلید هوش مصنوعی در تنظیمات Render پیدا نشد."
+            }), 500
 
         client = genai.Client(api_key=api_key)
 
         response = client.models.generate_content(
             model="gemini-3.8-flash",
-            contents="تو Jarvis هستی، یک دستیار هوشمند و دوستانه. به فارسی روان پاسخ بده.\n\nکاربر: " + message
+            contents=[
+                "تو Jarvis هستی، دستیار هوشمند و دوستانه. "
+                "به فارسی روان پاسخ بده. پاسخ‌ها دقیق و مفید باشند.",
+                message
+            ]
         )
 
-        answer = response.text or "نتوانستم پاسخی تولید کنم."
+        answer = response.text
+
+        if not answer:
+            answer = "پاسخی دریافت نکردم. دوباره تلاش کن."
+
         return jsonify({"reply": answer})
 
     except Exception:
-        app.logger.exception("Gemini request failed")
+        logging.exception("Gemini request failed")
         return jsonify({
-            "reply": "در ارتباط با هوش مصنوعی مشکلی پیش آمد. تنظیمات سرور را بررسی کن."
+            "reply": "اتصال به هوش مصنوعی مشکل دارد. گزارش Render را بررسی کن."
         }), 500
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
+    )
